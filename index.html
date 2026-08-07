@@ -554,11 +554,15 @@ function pickEdu(id) {
 
   const sel = document.getElementById("attendee");
   sel.innerHTML = '<option value="">— 본인 이름을 선택하세요 —</option>';
-  e.roster.forEach((p,i)=>{
-    const o=document.createElement("option"); o.value=i;
-    o.textContent=p.name+(e.signs[p.empno]?" ✓ (서명완료)":"");
-    sel.appendChild(o);
-  });
+  // 표시용으로 가나다순 정렬 (원본 인덱스는 value로 유지해 서명 매칭이 어긋나지 않게 함)
+  e.roster
+    .map((p,i)=>({p, i}))
+    .sort((a,b)=> String(a.p.name||"").localeCompare(String(b.p.name||""), "ko"))
+    .forEach(({p,i})=>{
+      const o=document.createElement("option"); o.value=i;
+      o.textContent=p.name+(e.signs[p.empno]?" ✓ (서명완료)":"");
+      sel.appendChild(o);
+    });
   document.getElementById("autofillBox").classList.add("hidden");
   clearPad(); setTimeout(resizeCanvas,50);
 }
