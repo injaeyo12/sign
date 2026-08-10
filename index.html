@@ -389,12 +389,19 @@ async function call(fn, arg) {
   return text;
 }
 
+// 서버 응답(JSON 문자열)을 받아 DATA와 TODAY/NOW_TIME을 함께 갱신.
+// today/nowTime이 응답에 있을 때만 갱신해, 부분 응답으로 기존 값이 지워지지 않게 한다.
+function applyData(json){
+  const parsed = JSON.parse(json);
+  DATA = parsed;
+  if (parsed.today) TODAY = parsed.today;
+  if (parsed.nowTime) NOW_TIME = parsed.nowTime;
+  syncDeviceLocks();
+}
+
 async function loadData() {
   const json = await call("apiGetData");
-  DATA = JSON.parse(json);
-  TODAY = DATA.today || "";
-  NOW_TIME = DATA.nowTime || "";
-  syncDeviceLocks();
+  applyData(json);
 }
 // 서버에 이 기기의 유효 서명이 없는 교육은 로컬 잠금을 해제 (관리자가 풀어준 경우 반영)
 function syncDeviceLocks(){
@@ -731,7 +738,7 @@ async function saveEdu() {
   try {
     const payload=JSON.stringify({id:editId, name, date, instructor, roster});
     const json = editId ? await call("apiUpdateEdu",payload) : await call("apiAddEdu",payload);
-    DATA=JSON.parse(json);
+    applyData(json);
     cancelEdit(); renderAll();
     toast(editId ? "교육이 수정되었습니다" : "교육이 등록되었습니다 (참석자 "+roster.length+"명)");
   } catch(e){ toast("저장 실패: 네트워크를 확인하세요", true); }
@@ -811,7 +818,7 @@ async function delEdu(id) {
   if(!confirm(`'${e.name}' 교육을 삭제할까요? 서명 기록도 함께 삭제됩니다.`)) return;
   try {
     const json=await call("apiDeleteEdu", JSON.stringify({id}));
-    DATA=JSON.parse(json); renderAll(); toast("삭제되었습니다");
+    applyData(json); renderAll(); toast("삭제되었습니다");
   } catch(err){ toast("삭제 실패", true); }
 }
 
