@@ -86,6 +86,9 @@
   .subtab { flex:1; height:36px; border:1px solid var(--border); border-radius:6px;
     background:var(--surface); color:var(--muted); font-size:13px; cursor:pointer; }
   .subtab.active { background:var(--text); color:#fff; border-color:var(--text); }
+  .time-row { display:flex; align-items:center; gap:8px; }
+  .time-row select { flex:1; }
+  .time-sep { color:var(--muted); font-weight:600; }
   .link { color:var(--blue); cursor:pointer; font-size:13px; }
   .app-title { display:flex; align-items:center; justify-content:center; gap:8px;
     text-align:center; font-size:17px; font-weight:700; color:var(--blue);
@@ -198,8 +201,15 @@
           <label>교육명</label>
           <input id="newEduName" placeholder="예: 2026년 신규자 안전교육">
           <label>교육일자</label>
-          <input id="newEduDate" placeholder="예: 2026.01.01.(월) 10:00">
-          <label>강사명 <span style="color:var(--muted);font-weight:400;">(양식의 '전임교수' 자리)</span></label>
+          <input id="newEduDate" type="date">
+          <label>교육 시간</label>
+          <div class="time-row">
+            <select id="newEduStart"></select>
+            <span class="time-sep">~</span>
+            <select id="newEduEnd"></select>
+          </div>
+          <p class="sub" style="margin:4px 0 0;">종료 시간이 지나면 참석자 화면에서 자동으로 비활성화됩니다.</p>
+          <label>강사명 <span style="color:var(--muted);font-weight:400;">(서명부 상단에 표시)</span></label>
           <input id="newEduInstructor" placeholder="예: 홍길동">
           <label>참석자 명단 <span style="color:var(--muted);font-weight:400;">(한 줄에 한 명: 이름, 사번, 부서)</span></label>
           <textarea id="newRoster" rows="6" placeholder="홍길동, 20250001, 안전관리부&#10;김철수, 20250002, 시설관리처"></textarea>
@@ -265,6 +275,7 @@
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
+let NOW_TIME = ""; // 서버 기준 현재 시각 (HH:MM)
 
 // ── 기기 식별 & 로컬 잠금 (localStorage) ──
 // 이 기기 고유 ID: 한 번 생성해 계속 사용
@@ -316,12 +327,21 @@ function eduDateKey(e){
   const d = nums[2].padStart(2,"0");
   return `${y}-${mo}-${d}`;
 }
-// 오늘 대비 상태: "past"(지남) | "today"(오늘) | "future"(예정) | "nodate"(날짜없음)
+// 교육 date에서 종료시간(HH:MM) 추출. "...09:00~12:00"의 뒤쪽 시간. 없으면 ""
+function eduEndTime(e){
+  const tm = String(e.date||"").match(/(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})/);
+  return tm ? tm[2].padStart(5,"0") : "";
+}
+// 오늘 대비 상태: "past"(지남) | "today"(오늘·진행가능) | "future"(예정) | "nodate"(날짜없음)
 function eduStatus(e){
   const k = eduDateKey(e);
   if (!k || !TODAY) return "nodate";
-  if (k === TODAY) return "today";
-  return k < TODAY ? "past" : "future";
+  if (k < TODAY) return "past";
+  if (k > TODAY) return "future";
+  // 오늘 교육: 종료시간이 있고 현재 시각이 그보다 지났으면 past로 처리
+  const end = eduEndTime(e);
+  if (end && NOW_TIME && NOW_TIME > end) return "past";
+  return "today";
 }
 
 // ═══════════ 서버 통신 (GitHub Pages ↔ Apps Script API) ═══════════
@@ -361,6 +381,7 @@ async function loadData() {
   const json = await call("apiGetData");
   DATA = JSON.parse(json);
   TODAY = DATA.today || "";
+  NOW_TIME = DATA.nowTime || "";
   syncDeviceLocks();
 }
 // 서버에 이 기기의 유효 서명이 없는 교육은 로컬 잠금을 해제 (관리자가 풀어준 경우 반영)
@@ -402,6 +423,7 @@ async function boot() {
     clearTimeout(t1);
     document.getElementById("bootLoading").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
+    fillTimeOptions();
     renderEduPick();
     setTimeout(resizeCanvas, 100);
   } catch(e) {
@@ -427,6 +449,26 @@ async function connectApi(){
   boot();
 }
 function renderAll(){ renderEduPick(); renderEduAdmin(); renderExport(); }
+
+// 시간 드롭다운 채우기 (08:00~20:00, 30분 단위)
+function fillTimeOptions(){
+  const start=document.getElementById("newEduStart");
+  const end=document.getElementById("newEduEnd");
+  if(!start||!end||start.options.length) return; // 이미 채웠으면 skip
+  const opts=[];
+  for(let h=8; h<=20; h++){
+    for(let m of [0,30]){
+      const hh=String(h).padStart(2,"0"), mm=String(m).padStart(2,"0");
+      opts.push(hh+":"+mm);
+    }
+  }
+  opts.forEach(t=>{
+    start.appendChild(new Option(t,t));
+    end.appendChild(new Option(t,t));
+  });
+  // 기본값: 시작 09:00, 종료 12:00
+  start.value="09:00"; end.value="12:00";
+}
 
 // ═══════════ 관리자 로그인 ═══════════
 let isAdmin = false;
@@ -560,7 +602,9 @@ function pickEdu(id) {
     .sort((a,b)=> String(a.p.name||"").localeCompare(String(b.p.name||""), "ko"))
     .forEach(({p,i})=>{
       const o=document.createElement("option"); o.value=i;
-      o.textContent=p.name+(e.signs[p.empno]?" ✓ (서명완료)":"");
+      const signed = !!e.signs[p.empno];
+      o.textContent=p.name+(signed?" ✓ (서명완료)":"");
+      if (signed) o.disabled = true; // 이미 서명한 사람은 선택 불가
       sel.appendChild(o);
     });
   document.getElementById("autofillBox").classList.add("hidden");
@@ -575,7 +619,7 @@ function onPickAttendee() {
   document.getElementById("afEmpno").textContent=p.empno;
   document.getElementById("afDept").textContent=p.dept;
   box.classList.remove("hidden");
-  if (e.signs[p.empno]) toast(p.name+"님은 이미 서명하셨습니다. 다시 하면 갱신됩니다.");
+  if (e.signs[p.empno]) toast(p.name+"님은 이미 서명이 완료되었습니다.", true);
 }
 async function submitSign() {
   const e=getEdu(currentEduId), idx=document.getElementById("attendee").value;
@@ -594,6 +638,13 @@ async function submitSign() {
       setDeviceLock(currentEduId);
       toast(res.msg || "이 기기에서는 이미 서명이 완료되었습니다.", true);
       pickEdu(currentEduId); // 잠금 안내 화면으로
+      return;
+    }
+    if (res && res.already) {
+      // 이 사람은 이미 서명 완료 (다른 기기에서 재서명 시도) → 거부
+      toast(res.msg || "이미 서명이 완료된 참석자입니다.", true);
+      try { await loadData(); } catch(_e){}
+      pickEdu(currentEduId); // 드롭다운 갱신(서명완료자 비활성화 반영)
       return;
     }
     if (!res || !res.ok) { toast("제출 실패: 다시 시도하세요", true); return; }
@@ -650,10 +701,16 @@ function rosterToText(roster){ return roster.map(p=>`${p.name}, ${p.empno}, ${p.
 
 async function saveEdu() {
   const name=document.getElementById("newEduName").value.trim();
-  const date=document.getElementById("newEduDate").value.trim();
+  const dateVal=document.getElementById("newEduDate").value.trim(); // yyyy-mm-dd
+  const startVal=document.getElementById("newEduStart").value; // HH:MM
+  const endVal=document.getElementById("newEduEnd").value;     // HH:MM
   const instructor=document.getElementById("newEduInstructor").value.trim();
   const editId=document.getElementById("editId").value;
   if(!name) return toast("교육명을 입력하세요", true);
+  if(!dateVal) return toast("교육일자를 선택하세요", true);
+  if(startVal >= endVal) return toast("종료 시간은 시작 시간보다 늦어야 합니다", true);
+  // 저장 형식: "2026-01-01 09:00~12:00" (날짜 파싱·정렬·종료시간 추출과 호환)
+  const date = dateVal + " " + startVal + "~" + endVal;
   const {roster,errs}=parseRoster(document.getElementById("newRoster").value);
   if(!roster.length) return toast("참석자 명단을 입력하세요", true);
   if(errs.length) toast(errs.length+"개 줄은 형식오류로 제외 (줄 "+errs.join(",")+")", true);
@@ -672,7 +729,11 @@ function editEdu(id) {
   const e=getEdu(id);
   document.getElementById("editId").value=e.id;
   document.getElementById("newEduName").value=e.name;
-  document.getElementById("newEduDate").value=e.date;
+  // 저장된 date에서 날짜/시작/종료 추출해 각 입력에 채움
+  const parsed = parseEduDateTime(e.date);
+  document.getElementById("newEduDate").value = parsed.date || "";
+  if (parsed.start) document.getElementById("newEduStart").value = parsed.start;
+  if (parsed.end) document.getElementById("newEduEnd").value = parsed.end;
   document.getElementById("newEduInstructor").value=e.instructor||"";
   document.getElementById("newRoster").value=rosterToText(e.roster);
   document.getElementById("formTitle").textContent="교육 수정";
@@ -680,10 +741,23 @@ function editEdu(id) {
   document.getElementById("cancelEditBtn").classList.remove("hidden");
   window.scrollTo({top:0, behavior:"smooth"});
 }
+// 저장 형식 "2026-01-01 09:00~12:00" → {date, start, end}
+function parseEduDateTime(s){
+  s = String(s||"");
+  const dm = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  const tm = s.match(/(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})/);
+  return {
+    date: dm ? dm[1]+"-"+dm[2]+"-"+dm[3] : "",
+    start: tm ? tm[1].padStart(5,"0") : "",
+    end: tm ? tm[2].padStart(5,"0") : ""
+  };
+}
 function cancelEdit() {
   document.getElementById("editId").value="";
   document.getElementById("newEduName").value="";
   document.getElementById("newEduDate").value="";
+  document.getElementById("newEduStart").value="09:00";
+  document.getElementById("newEduEnd").value="12:00";
   document.getElementById("newEduInstructor").value="";
   document.getElementById("newRoster").value="";
   document.getElementById("formTitle").textContent="새 교육 등록";
@@ -798,10 +872,10 @@ async function exportExcel(id) {
   ws.getCell("A2").alignment={horizontal:"center",vertical:"middle"};
   ws.getRow(2).height=42;
 
-  // ── 3행: 강사명 [ ○○○ 전임교수 ] ──
+  // ── 3행: 강사명 [ ○○○ ] ──
   ws.mergeCells("A3:F3");
   const instr = e.instructor ? e.instructor : "○○○";
-  ws.getCell("A3").value="[ "+instr+" 전임교수 ]";
+  ws.getCell("A3").value="[ "+instr+" ]";
   ws.getCell("A3").font={size:12,bold:true,name:"맑은 고딕"};
   ws.getCell("A3").alignment={horizontal:"center",vertical:"middle"};
   ws.getRow(3).height=24;
