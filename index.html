@@ -278,6 +278,8 @@ let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
 let NOW_TIME = ""; // 서버 기준 현재 시각 (HH:MM)
+let SERVER_SKEW = 0;      // 서버(한국) 시각 - 이 기기 시각 (ms)
+let CLOCK_SYNCED = false; // 서버 시각을 한 번이라도 받았는지
 
 // ── 기기 식별 & 로컬 잠금 (localStorage) ──
 // 이 기기 고유 ID: 한 번 생성해 계속 사용
@@ -344,10 +346,14 @@ function eduEndTime(e){
   const tm = String(e.date||"").match(/(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})/);
   return tm ? tm[2].padStart(5,"0") : "";
 }
-// 오늘 대비 상태: "past"(지남) | "today"(오늘·진행가능) | "future"(예정) | "nodate"(날짜없음)
+// 오늘 대비 상태: "past"(지남) | "today"(오늘·진행가능) | "future"(예정)
+//               | "nodate"(날짜없음) | "unknown"(서버 오늘 날짜 미확인)
 function eduStatus(e){
   const k = eduDateKey(e);
-  if (!k || !TODAY) return "nodate";
+  // 날짜가 있는 교육인데 서버 기준 오늘을 아직 모르면 '알 수 없음'.
+  // (예전에는 nodate로 처리돼 모든 교육이 선택 가능하게 보였음)
+  if (k && !TODAY) return "unknown";
+  if (!k) return "nodate";
   if (k < TODAY) return "past";
   if (k > TODAY) return "future";
   // 오늘 교육: 종료시간이 있고 현재 시각이 그보다 지났으면 past로 처리
@@ -394,9 +400,35 @@ async function call(fn, arg) {
 function applyData(json){
   const parsed = JSON.parse(json);
   DATA = parsed;
-  if (parsed.today) TODAY = parsed.today;
-  if (parsed.nowTime) NOW_TIME = parsed.nowTime;
+  syncServerClock(parsed.today, parsed.nowTime);
   syncDeviceLocks();
+}
+
+// 서버가 준 today/nowTime으로 이 기기 시계와의 오차를 기록해 둔다.
+function syncServerClock(today, nowTime){
+  if (!today || !nowTime) return;
+  TODAY = today; NOW_TIME = nowTime;
+  const t = Date.parse(today + "T" + nowTime + ":00+09:00");
+  if (!isNaN(t)) { SERVER_SKEW = t - Date.now(); CLOCK_SYNCED = true; }
+}
+// 보정된 현재 시각(한국)으로 TODAY/NOW_TIME 갱신. 값이 바뀌면 true 반환.
+function tickClock(){
+  if (!CLOCK_SYNCED) return false;
+  const d = new Date(Date.now() + SERVER_SKEW);
+  let day = "", hm = "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
+      hour:"2-digit", minute:"2-digit", hourCycle:"h23"
+    }).formatToParts(d);
+    const g = k => (parts.find(x=>x.type===k)||{}).value || "";
+    day = g("year")+"-"+g("month")+"-"+g("day");
+    hm  = g("hour")+":"+g("minute");
+  } catch(e){ return false; }
+  if (!day || day.length !== 10 || hm.length !== 5) return false;
+  const changed = (day !== TODAY || hm !== NOW_TIME);
+  TODAY = day; NOW_TIME = hm;
+  return changed;
 }
 
 async function loadData() {
@@ -524,8 +556,12 @@ function showAdmin() {
   window.scrollTo({top:0});
 }
 function logoutAdmin() {
+  // 서명 화면은 항상 '참석자 모드'로 돌아간다.
+  // (관리자 권한이 남아 있으면 지난/예정 교육까지 전부 선택 가능해 보임)
+  isAdmin = false;
   document.getElementById("adminView").classList.add("hidden");
   document.getElementById("signView").classList.remove("hidden");
+  tickClock();
   renderEduPick();
   window.scrollTo({top:0});
 }
@@ -590,7 +626,7 @@ function renderEduPick() {
     return `<div class="edu-item disabled">
       <div><div class="edu-name">${esc(e.name)}</div>
         <div class="edu-meta">${esc(e.date)||'일자 미정'} · 참석자 ${total}명</div></div>
-      <span class="badge upcoming">예정</span></div>`;
+      <span class="badge upcoming">${st==="unknown" ? "확인 중" : "예정"}</span></div>`;
   }).join("");
 }
 function pickEdu(id) {
@@ -598,7 +634,9 @@ function pickEdu(id) {
   // 관리자가 아니면서 오늘/날짜없음 교육이 아니면 진입 차단
   const st = eduStatus(e);
   if (!isAdmin && st !== "today" && st !== "nodate") {
-    toast(st === "future" ? "아직 예정된 교육입니다. 교육 당일에 서명할 수 있습니다." : "종료된 교육입니다.", true);
+    toast(st === "future" ? "아직 예정된 교육입니다. 교육 당일에 서명할 수 있습니다."
+        : st === "unknown" ? "교육 일자를 확인하는 중입니다. 새로고침 후 다시 시도하세요."
+        : "종료된 교육입니다.", true);
     return;
   }
   currentEduId = id;
@@ -981,6 +1019,19 @@ function initQR(){
   new QRCode(document.getElementById("qrcode"), {text:url, width:200, height:200});
   document.getElementById("qrUrlText").textContent=url;
 }
+
+// 화면을 오래 켜 둬도 날짜·시간이 흘러가도록 주기적으로 갱신.
+// 교육선택 목록이 보이는 동안에만 다시 그린다(서명 중에는 건드리지 않음).
+setInterval(()=>{
+  if (!tickClock()) return;
+  const app = document.getElementById("app");
+  const signView = document.getElementById("signView");
+  const pick = document.getElementById("eduPick");
+  if (!app || app.classList.contains("hidden")) return;
+  if (!signView || signView.classList.contains("hidden")) return;
+  if (!pick || pick.classList.contains("hidden")) return;
+  renderEduPick();
+}, 30000);
 
 window.addEventListener("resize", ()=>setTimeout(resizeCanvas,100));
 boot();
