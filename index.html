@@ -162,7 +162,7 @@
         <div id="signBody">
           <label>이름 선택</label>
           <select id="attendee" onchange="onPickAttendee()"><option value="">— 본인 이름을 선택하세요 —</option></select>
-          <div id="autofillBox" class="autofill hidden">사번 <b id="afEmpno"></b> · 부서 <b id="afDept"></b></div>
+          <div id="autofillBox" class="autofill hidden"><b id="afLabel"></b></div>
           <label>수기 서명</label>
           <div class="sig-box"><canvas id="pad"></canvas><span class="sig-hint" id="sigHint">여기에 서명해 주세요</span></div>
           <div class="row">
@@ -310,7 +310,7 @@ function toast(msg, err) {
   t.textContent = msg; t.style.background = err ? "#A32D2D" : "#3B6D11";
   t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2400);
 }
-function esc(s){ return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function esc(s){ return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function getEdu(id){ return DATA.educations.find(e => e.id === id); }
 // 교육일자 오름차순 정렬 (연-월-일-시-분 파싱, 빈 날짜는 뒤로)
 function sortedEdu(){
@@ -369,10 +369,27 @@ try { API_URL = localStorage.getItem("eduApiUrl") || ""; } catch(e){}
 
 // 기존 호출부(call("apiGetData") 등)와 호환: 함수명을 API action으로 매핑
 const ACTION_MAP = {
-  apiGetData:"getData", apiAddEdu:"addEdu", apiUpdateEdu:"updateEdu",
+  apiGetPublic:"getPublic", apiGetAttendee:"getAttendee", apiGetData:"getData",
+  apiAddEdu:"addEdu", apiUpdateEdu:"updateEdu",
   apiDeleteEdu:"deleteEdu", apiSubmitSign:"submitSign", apiUnlockSign:"unlockSign",
-  apiGetSignImages:"getSignImages", apiCheckAdmin:"checkAdmin", apiChangeAdminPw:"changeAdminPw"
+  apiGetSignImages:"getSignImages", apiLogin:"login", apiLogout:"logout",
+  apiChangeAdminPw:"changeAdminPw"
 };
+
+// ── 관리자 세션 토큰 ──
+// sessionStorage에 둔다: 탭을 닫으면 사라져, 교육장에 두고 온 태블릿에
+// 관리자 권한이 계속 남아 있는 상황을 줄인다.
+function getToken(){ try { return sessionStorage.getItem("eduAdminToken") || ""; } catch(e){ return ""; } }
+function setToken(t){ try { t ? sessionStorage.setItem("eduAdminToken", t) : sessionStorage.removeItem("eduAdminToken"); } catch(e){} }
+
+// 서버가 인증을 요구하면 관리자 상태를 정리하고 서명 화면으로 되돌린다.
+function handleAuthExpired(){
+  setToken(""); isAdmin = false;
+  document.getElementById("adminView").classList.add("hidden");
+  document.getElementById("signView").classList.remove("hidden");
+  toast("관리자 인증이 만료되었습니다. 다시 로그인해 주세요.", true);
+  loadData().then(renderEduPick).catch(()=>{});
+}
 
 // 통신: POST + text/plain (CORS preflight 회피). payload는 문자열이거나 객체.
 // 반환은 기존 코드가 JSON.parse(json) 하므로 '문자열'로 돌려준다.
@@ -387,7 +404,7 @@ async function call(fn, arg) {
   const res = await fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, payload: payloadObj }),
+    body: JSON.stringify({ action, payload: payloadObj, token: getToken() }),
     redirect: "follow"
   });
   const text = await res.text();
@@ -431,17 +448,36 @@ function tickClock(){
   return changed;
 }
 
+// 관리자로 로그인한 상태면 전체 데이터를, 아니면 참석자용 최소 데이터를 받는다.
+// 참석자용 응답에는 오늘 교육의 '이름'만 들어 있고 사번·부서·서명이미지는 없다.
 async function loadData() {
-  const json = await call("apiGetData");
-  applyData(json);
+  if (isAdmin && getToken()) {
+    const json = await call("apiGetData");
+    const parsed = JSON.parse(json);
+    if (parsed && parsed.authRequired) { handleAuthExpired(); throw new Error("AUTH"); }
+    applyData(json);
+    return;
+  }
+  applyData(await call("apiGetPublic", { device: DEVICE_ID }));
 }
 // 서버에 이 기기의 유효 서명이 없는 교육은 로컬 잠금을 해제 (관리자가 풀어준 경우 반영)
 function syncDeviceLocks(){
   DATA.educations.forEach(e=>{
-    const active=(e.details||[]).filter(d=>!d.unlocked && String(d.device||"")===DEVICE_ID);
-    if(active.length===0) clearDeviceLock(e.id);
-    else setDeviceLock(e.id);
+    let locked;
+    if (e.details) { // 관리자용 응답
+      locked = e.details.some(d=>!d.unlocked && String(d.device||"")===DEVICE_ID);
+    } else {         // 참석자용 응답 (서버가 이 기기 기준으로 판단해서 내려줌)
+      locked = !!e.locked;
+    }
+    if (locked) setDeviceLock(e.id); else clearDeviceLock(e.id);
   });
+}
+// 참석자용/관리자용 응답 어느 쪽이든 '서명 완료된 명단 번호' 집합을 돌려준다.
+function signedIdxSet(e){
+  if (e.signedIdx) return new Set(e.signedIdx);
+  const s = new Set();
+  (e.roster||[]).forEach((p,i)=>{ if (e.signs && e.signs[p.empno]) s.add(i); });
+  return s;
 }
 async function refresh() {
   try { await loadData(); renderAll(); toast("최신 상태로 갱신했습니다"); }
@@ -499,7 +535,8 @@ async function connectApi(){
   document.getElementById("bootLoading").classList.remove("hidden");
   boot();
 }
-function renderAll(){ renderEduPick(); renderEduAdmin(); renderExport(); }
+// 참석자용 응답에는 관리자 화면이 쓰는 필드가 없으므로, 관리자일 때만 그린다.
+function renderAll(){ renderEduPick(); if (isAdmin) { renderEduAdmin(); renderExport(); } }
 
 // 시간 드롭다운 채우기 (08:00~20:00, 30분 단위)
 function fillTimeOptions(){
@@ -538,13 +575,17 @@ async function doAdminLogin() {
   const btn = document.getElementById("loginBtn");
   btn.disabled = true; btn.textContent = "확인 중…";
   try {
-    const res = JSON.parse(await call("apiCheckAdmin", JSON.stringify({pw})));
-    if (res.ok) {
+    // 서버가 세션 토큰을 발급한다. 이 토큰이 있어야 관리자 API가 응답한다.
+    const res = JSON.parse(await call("apiLogin", JSON.stringify({pw})));
+    if (res.ok && res.token) {
+      setToken(res.token);
       isAdmin = true;
       closeAdminLogin();
+      await loadData();           // 관리자용 전체 데이터로 교체
       showAdmin();
+      if (res.defaultPw) toast("기본 비밀번호를 사용 중입니다. 'QR·설정'에서 변경하세요.", true);
     } else {
-      toast("비밀번호가 올바르지 않습니다", true);
+      toast(res.msg || "비밀번호가 올바르지 않습니다", true);
     }
   } catch(e){ toast("확인 실패: 네트워크를 확인하세요", true); }
   finally { btn.disabled = false; btn.textContent = "로그인"; }
@@ -555,15 +596,18 @@ function showAdmin() {
   renderEduAdmin(); renderExport(); initQR();
   window.scrollTo({top:0});
 }
-function logoutAdmin() {
+async function logoutAdmin() {
   // 서명 화면은 항상 '참석자 모드'로 돌아간다.
-  // (관리자 권한이 남아 있으면 지난/예정 교육까지 전부 선택 가능해 보임)
+  // 화면만 바꾸는 게 아니라 서버 토큰을 폐기하고, 참석자용 최소 데이터로 다시 받는다.
+  try { await call("apiLogout"); } catch(e){}
+  setToken("");
   isAdmin = false;
   document.getElementById("adminView").classList.add("hidden");
   document.getElementById("signView").classList.remove("hidden");
+  window.scrollTo({top:0});
+  try { await loadData(); } catch(e){}
   tickClock();
   renderEduPick();
-  window.scrollTo({top:0});
 }
 async function changePw() {
   const current = document.getElementById("pwCurrent").value;
@@ -606,7 +650,7 @@ function renderEduPick() {
     return;
   }
   el.innerHTML = visible.map(e=>{
-    const total=e.roster.length, signed=Object.keys(e.signs).length;
+    const total=e.roster.length, signed=signedIdxSet(e).size;
     const done = signed>=total && total>0;
     const st = eduStatus(e);
     // 관리자는 모든 교육 선택 가능. 참석자는 오늘/날짜없음만
@@ -653,13 +697,14 @@ function pickEdu(id) {
 
   const sel = document.getElementById("attendee");
   sel.innerHTML = '<option value="">— 본인 이름을 선택하세요 —</option>';
+  const doneSet = signedIdxSet(e);
   // 표시용으로 가나다순 정렬 (원본 인덱스는 value로 유지해 서명 매칭이 어긋나지 않게 함)
   e.roster
     .map((p,i)=>({p, i}))
     .sort((a,b)=> String(a.p.name||"").localeCompare(String(b.p.name||""), "ko"))
     .forEach(({p,i})=>{
       const o=document.createElement("option"); o.value=i;
-      const signed = !!e.signs[p.empno];
+      const signed = doneSet.has(i);
       o.textContent=p.name+(signed?" ✓ (서명완료)":"");
       if (signed) o.disabled = true; // 이미 서명한 사람은 선택 불가
       sel.appendChild(o);
@@ -668,15 +713,34 @@ function pickEdu(id) {
   clearPad(); setTimeout(resizeCanvas,50);
 }
 function backToPick(){ renderEduPick(); }
-function onPickAttendee() {
+async function onPickAttendee() {
   const e=getEdu(currentEduId), idx=document.getElementById("attendee").value;
   const box=document.getElementById("autofillBox");
   if (idx===""){ box.classList.add("hidden"); return; }
   const p=e.roster[idx];
-  document.getElementById("afEmpno").textContent=p.empno;
-  document.getElementById("afDept").textContent=p.dept;
-  box.classList.remove("hidden");
-  if (e.signs[p.empno]) toast(p.name+"님은 이미 서명이 완료되었습니다.", true);
+  const label=document.getElementById("afLabel");
+
+  if (p.empno != null) {                 // 관리자용 데이터에는 이미 들어 있음
+    label.textContent = "사번 " + p.empno + " · 부서 " + (p.dept||"");
+    box.classList.remove("hidden");
+  } else {
+    // 참석자용 데이터에는 사번·부서가 없다.
+    // 명단 전체가 아니라 '선택한 본인 1명'만 서버에 물어본다.
+    label.textContent = "확인 중…";
+    box.classList.remove("hidden");
+    try {
+      const res = JSON.parse(await call("apiGetAttendee", { eduId: currentEduId, idx: Number(idx) }));
+      if (res && res.ok && res.person) {
+        p.empno = res.person.empno; p.dept = res.person.dept; // 본인 것만 화면에 보관
+        label.textContent = "사번 " + p.empno + " · 부서 " + (p.dept||"");
+      } else {
+        label.textContent = "사번 뒤 2자리 " + (p.tail||"--");
+      }
+    } catch(err) {
+      label.textContent = "사번 뒤 2자리 " + (p.tail||"--");
+    }
+  }
+  if (signedIdxSet(e).has(Number(idx))) toast(p.name+"님은 이미 서명이 완료되었습니다.", true);
 }
 async function submitSign() {
   const e=getEdu(currentEduId), idx=document.getElementById("attendee").value;
@@ -686,8 +750,9 @@ async function submitSign() {
   const btn=document.getElementById("submitBtn");
   btn.disabled=true; btn.textContent="제출 중…";
   try {
+    // 이름/사번/부서는 보내지 않는다. 서버가 명단 번호(idx)로 시트에서 찾아 기록한다.
     const res = JSON.parse(await call("apiSubmitSign", JSON.stringify({
-      eduId:currentEduId, name:p.name, empno:p.empno, dept:p.dept,
+      eduId:currentEduId, idx:Number(idx),
       sig:canvas.toDataURL("image/png"), device: DEVICE_ID
     })));
     if (res && res.locked) {
@@ -707,7 +772,8 @@ async function submitSign() {
     if (!res || !res.ok) { toast("제출 실패: 다시 시도하세요", true); return; }
     // 성공: 이 기기를 이 교육에 잠금
     setDeviceLock(currentEduId);
-    e.signs[p.empno] = { time:"" };
+    if (e.signedIdx) e.signedIdx.push(Number(idx));
+    else if (e.signs) e.signs[p.empno] = { time:"" };
     toast(p.name+"님 서명이 제출되었습니다");
     document.getElementById("attendee").value="";
     document.getElementById("autofillBox").classList.add("hidden");
@@ -825,12 +891,13 @@ function renderEduAdmin() {
   const el=document.getElementById("eduAdminList");
   if(!DATA.educations.length){ el.innerHTML='<div class="empty">등록된 교육이 없습니다.</div>'; return; }
   el.innerHTML=sortedEduDesc().map(e=>{
-    const signed=Object.keys(e.signs).length;
+    const doneSet=signedIdxSet(e);
+    const signed=doneSet.size;
     const st=eduStatus(e);
     const stLabel = st==="today" ? '<span class="badge done">오늘</span>'
       : st==="future" ? '<span class="badge upcoming">예정</span>'
       : st==="past" ? '<span class="badge">종료</span>' : '';
-    const pills=e.roster.map(p=>`<span class="pill ${e.signs[p.empno]?'signed':''}">${esc(p.name)}${e.signs[p.empno]?' ✓':''}</span>`).join("");
+    const pills=e.roster.map((p,i)=>`<span class="pill ${doneSet.has(i)?'signed':''}">${esc(p.name)}${doneSet.has(i)?' ✓':''}</span>`).join("");
     return `<div class="edu-item">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div><div class="edu-name">${esc(e.name)}</div>
@@ -865,7 +932,7 @@ function renderExport() {
   const el=document.getElementById("exportList");
   if(!DATA.educations.length){ el.innerHTML='<div class="empty">등록된 교육이 없습니다.</div>'; return; }
   el.innerHTML=sortedEduDesc().map(e=>{
-    const signed=Object.keys(e.signs).length, total=e.roster.length;
+    const signed=signedIdxSet(e).size, total=e.roster.length;
     const done=signed>=total&&total>0;
     // 유효 서명(잠금해제 안 된 것)만 상세로 표시
     const active=(e.details||[]).filter(d=>!d.unlocked);
@@ -873,7 +940,7 @@ function renderExport() {
       <div class="sign-row">
         <div class="sign-info"><b>${esc(d.name)}</b> <span class="edu-meta">${esc(d.empno)} · ${esc(d.dept)}</span>
           <div class="edu-meta">${esc(d.time)}</div></div>
-        <button class="btn-ghost btn-sm unlock-btn" onclick="unlockSign(${d.row},'${esc(d.name)}')">잠금 해제</button>
+        <button class="btn-ghost btn-sm unlock-btn" onclick="unlockSign(${Number(d.row)})">잠금 해제</button>
       </div>`).join("") : '<div class="edu-meta" style="padding:6px 0;">아직 서명 기록이 없습니다.</div>';
     return `<div class="edu-item">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -891,8 +958,11 @@ function toggleDetail(id){
   const hidden=box.classList.toggle("hidden");
   tog.textContent = tog.textContent.replace(hidden?"▾":"▸", hidden?"▸":"▾");
 }
-async function unlockSign(row, name){
-  if(!confirm(`'${name}' 님의 서명을 잠금 해제할까요?\n\n이 서명은 무효 처리되고(출력에서 제외), 해당 기기가 다시 서명할 수 있게 됩니다.`)) return;
+async function unlockSign(row){
+  // 이름은 화면 속성(onclick)이 아니라 데이터에서 찾는다.
+  let name = "";
+  DATA.educations.forEach(e=>(e.details||[]).forEach(d=>{ if(Number(d.row)===Number(row)) name=d.name; }));
+  if(!confirm(`'${name}' 님의 서명을 잠금 해제할까요?\n\n이 서명은 무효 처리되어 서명 이미지가 삭제되고, 해당 기기가 다시 서명할 수 있게 됩니다.`)) return;
   try {
     const res=JSON.parse(await call("apiUnlockSign", JSON.stringify({row})));
     if(res.ok){
