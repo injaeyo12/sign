@@ -473,6 +473,7 @@ function syncDeviceLocks(){
   });
 }
 // 참석자용/관리자용 응답 어느 쪽이든 '서명 완료된 명단 번호' 집합을 돌려준다.
+function rosterTotal(e){ return (e.count != null) ? e.count : (e.roster||[]).length; }
 function signedIdxSet(e){
   if (e.signedIdx) return new Set(e.signedIdx);
   const s = new Set();
@@ -535,8 +536,12 @@ async function connectApi(){
   document.getElementById("bootLoading").classList.remove("hidden");
   boot();
 }
-// 참석자용 응답에는 관리자 화면이 쓰는 필드가 없으므로, 관리자일 때만 그린다.
-function renderAll(){ renderEduPick(); if (isAdmin) { renderEduAdmin(); renderExport(); } }
+// 관리자 화면과 참석자 목록은 서로 다른 데이터를 쓴다.
+// 관리자 데이터로 참석자 목록을 미리 그려두면, 서명 화면으로 나갈 때 그 잔상이 보인다.
+function renderAll(){
+  if (isAdmin) { renderEduAdmin(); renderExport(); }
+  else { renderEduPick(); }
+}
 
 // 시간 드롭다운 채우기 (08:00~20:00, 30분 단위)
 function fillTimeOptions(){
@@ -599,15 +604,28 @@ function showAdmin() {
 async function logoutAdmin() {
   // 서명 화면은 항상 '참석자 모드'로 돌아간다.
   // 화면만 바꾸는 게 아니라 서버 토큰을 폐기하고, 참석자용 최소 데이터로 다시 받는다.
-  try { await call("apiLogout"); } catch(e){}
-  setToken("");
   isAdmin = false;
+  // ★ 화면을 바꾸기 '전에' 목록을 비운다.
+  //   데이터를 받아오는 동안 이전 목록이 남아 있으면 잠깐 스쳐 보인다.
+  DATA = { educations: [] };
+  document.getElementById("eduPick").innerHTML =
+    '<div class="empty">교육 목록을 불러오는 중…</div>';
+  document.getElementById("signForm").classList.add("hidden");
+  document.getElementById("eduPick").classList.remove("hidden");
   document.getElementById("adminView").classList.add("hidden");
   document.getElementById("signView").classList.remove("hidden");
   window.scrollTo({top:0});
-  try { await loadData(); } catch(e){}
-  tickClock();
-  renderEduPick();
+
+  try { await call("apiLogout"); } catch(e){}
+  setToken("");
+  try {
+    await loadData();
+    tickClock();
+    renderEduPick();
+  } catch(e) {
+    document.getElementById("eduPick").innerHTML =
+      '<div class="empty">목록을 불러오지 못했습니다. 새로고침을 눌러 주세요.</div>';
+  }
 }
 async function changePw() {
   const current = document.getElementById("pwCurrent").value;
@@ -650,7 +668,7 @@ function renderEduPick() {
     return;
   }
   el.innerHTML = visible.map(e=>{
-    const total=e.roster.length, signed=signedIdxSet(e).size;
+    const total=rosterTotal(e), signed=signedIdxSet(e).size;
     const done = signed>=total && total>0;
     const st = eduStatus(e);
     // 관리자는 모든 교육 선택 가능. 참석자는 오늘/날짜없음만
@@ -687,7 +705,7 @@ function pickEdu(id) {
   document.getElementById("eduPick").classList.add("hidden");
   document.getElementById("signForm").classList.remove("hidden");
   document.getElementById("signEduName").textContent = e.name;
-  document.getElementById("signEduMeta").textContent = (e.date||'') + " · 참석자 " + e.roster.length + "명";
+  document.getElementById("signEduMeta").textContent = (e.date||'') + " · 참석자 " + rosterTotal(e) + "명";
 
   // 기기 잠금 체크: 관리자는 예외, 일반 참석자는 잠긴 기기면 서명 폼 대신 안내
   const locked = !isAdmin && isDeviceLocked(id);
