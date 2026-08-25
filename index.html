@@ -148,7 +148,7 @@
           <h1>교육 선택</h1>
           <span class="link" onclick="refresh()">↻ 새로고침</span>
         </div>
-        <p class="sub">서명할 교육을 선택하세요.</p>
+        <p class="sub">서명할 교육을 선택하세요. <span id="appVer" style="opacity:.45;font-size:11px"></span></p>
         <div id="eduPickList"></div>
       </div>
 
@@ -274,6 +274,8 @@
 
 <script>
 // ═══════════ 상태 ═══════════
+// 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
+const APP_VERSION = "2026-08-25c";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -645,7 +647,8 @@ async function reloadPickList(attempt) {
     console.error("교육 목록 불러오기 실패:", err);
     setPickListHTML(
       '<div class="empty">교육 목록을 불러오지 못했습니다.<br>' +
-      '<span style="font-size:12px;opacity:.7">' + esc(err && err.message ? err.message : "") + '</span><br><br>' +
+      '<span style="font-size:12px;opacity:.7">' + esc(err && err.message ? err.message : "") +
+      ' (v' + APP_VERSION + ')</span><br><br>' +
       '<button class="btn-ghost btn-sm" onclick="retryPickList()">다시 시도</button></div>');
   }
 }
@@ -680,15 +683,29 @@ function switchSub(s) {
 // ═══════════ 서명: 교육선택 ═══════════
 // 교육 목록 영역(#eduPickList)에만 내용을 넣는다.
 // 카드(#eduPick) 자체를 덮어쓰면 제목·새로고침 버튼·목록 컨테이너가 함께 사라진다.
+// 목록 컨테이너를 돌려준다. 어떤 이유로든 사라졌으면 다시 만들어 붙인다.
+// (컨테이너가 없어 innerHTML을 못 넣고 화면이 멈추는 상황을 원천 차단)
+function getPickListEl(){
+  let el = document.getElementById("eduPickList");
+  if (!el) {
+    const card = document.getElementById("eduPick");
+    if (!card) return null;
+    el = document.createElement("div");
+    el.id = "eduPickList";
+    card.appendChild(el);
+  }
+  return el;
+}
 function setPickListHTML(html){
-  const el = document.getElementById("eduPickList");
+  const el = getPickListEl();
   if (el) el.innerHTML = html;
 }
 function renderEduPick() {
   currentEduId = null;
   document.getElementById("eduPick").classList.remove("hidden");
   document.getElementById("signForm").classList.add("hidden");
-  const el = document.getElementById("eduPickList");
+  const el = getPickListEl();
+  if (!el) return;
   if (!DATA.educations.length) {
     el.innerHTML = '<div class="empty">등록된 교육이 없습니다.</div>';
     return;
@@ -1178,6 +1195,9 @@ setInterval(()=>{
 }, 30000);
 
 window.addEventListener("resize", ()=>setTimeout(resizeCanvas,100));
+
+console.log("교육 서명부 화면 버전:", APP_VERSION);
+try { document.getElementById("appVer").textContent = "v" + APP_VERSION; } catch(e){}
 boot();
 </script>
 </body>
