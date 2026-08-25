@@ -615,8 +615,9 @@ async function logoutAdmin() {
   // ★ 화면을 바꾸기 '전에' 목록을 비운다.
   //   데이터를 받아오는 동안 이전 목록이 남아 있으면 잠깐 스쳐 보인다.
   DATA = { educations: [] };
-  document.getElementById("eduPick").innerHTML =
-    '<div class="empty">교육 목록을 불러오는 중…</div>';
+  // ※ #eduPick은 카드 전체다. 여기를 덮어쓰면 안쪽 #eduPickList가 사라져
+  //    이후 renderEduPick()이 그릴 곳을 잃는다. 반드시 목록 영역만 비운다.
+  setPickListHTML('<div class="empty">교육 목록을 불러오는 중…</div>');
   document.getElementById("signForm").classList.add("hidden");
   document.getElementById("eduPick").classList.remove("hidden");
   document.getElementById("adminView").classList.add("hidden");
@@ -642,15 +643,14 @@ async function reloadPickList(attempt) {
       return reloadPickList(attempt + 1);
     }
     console.error("교육 목록 불러오기 실패:", err);
-    document.getElementById("eduPick").innerHTML =
+    setPickListHTML(
       '<div class="empty">교육 목록을 불러오지 못했습니다.<br>' +
       '<span style="font-size:12px;opacity:.7">' + esc(err && err.message ? err.message : "") + '</span><br><br>' +
-      '<button class="btn-ghost btn-sm" onclick="retryPickList()">다시 시도</button></div>';
+      '<button class="btn-ghost btn-sm" onclick="retryPickList()">다시 시도</button></div>');
   }
 }
 async function retryPickList(){
-  document.getElementById("eduPick").innerHTML =
-    '<div class="empty">교육 목록을 불러오는 중…</div>';
+  setPickListHTML('<div class="empty">교육 목록을 불러오는 중…</div>');
   await reloadPickList();
 }
 async function changePw() {
@@ -678,6 +678,12 @@ function switchSub(s) {
 }
 
 // ═══════════ 서명: 교육선택 ═══════════
+// 교육 목록 영역(#eduPickList)에만 내용을 넣는다.
+// 카드(#eduPick) 자체를 덮어쓰면 제목·새로고침 버튼·목록 컨테이너가 함께 사라진다.
+function setPickListHTML(html){
+  const el = document.getElementById("eduPickList");
+  if (el) el.innerHTML = html;
+}
 function renderEduPick() {
   currentEduId = null;
   document.getElementById("eduPick").classList.remove("hidden");
