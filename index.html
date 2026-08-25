@@ -393,7 +393,7 @@ function handleAuthExpired(){
 
 // 통신: POST + text/plain (CORS preflight 회피). payload는 문자열이거나 객체.
 // 반환은 기존 코드가 JSON.parse(json) 하므로 '문자열'로 돌려준다.
-async function call(fn, arg) {
+async function call(fn, arg, tokenOverride) {
   if (!API_URL) throw new Error("NO_API_URL");
   const action = ACTION_MAP[fn] || fn;
   let payloadObj;
@@ -404,7 +404,7 @@ async function call(fn, arg) {
   const res = await fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, payload: payloadObj, token: getToken() }),
+    body: JSON.stringify({ action, payload: payloadObj, token: (tokenOverride != null ? tokenOverride : getToken()) }),
     redirect: "follow"
   });
   const text = await res.text();
@@ -415,7 +415,13 @@ async function call(fn, arg) {
 // 서버 응답(JSON 문자열)을 받아 DATA와 TODAY/NOW_TIME을 함께 갱신.
 // today/nowTime이 응답에 있을 때만 갱신해, 부분 응답으로 기존 값이 지워지지 않게 한다.
 function applyData(json){
-  const parsed = JSON.parse(json);
+  let parsed;
+  try { parsed = JSON.parse(json); }
+  catch(e){ console.error("서버 응답을 해석하지 못했습니다:", json); throw new Error("응답 형식 오류"); }
+  if (!parsed || !Array.isArray(parsed.educations)) {
+    console.error("예상과 다른 응답:", parsed);
+    throw new Error((parsed && parsed.msg) ? parsed.msg : "교육 목록을 받지 못했습니다");
+  }
   DATA = parsed;
   syncServerClock(parsed.today, parsed.nowTime);
   syncDeviceLocks();
@@ -462,7 +468,7 @@ async function loadData() {
 }
 // 서버에 이 기기의 유효 서명이 없는 교육은 로컬 잠금을 해제 (관리자가 풀어준 경우 반영)
 function syncDeviceLocks(){
-  DATA.educations.forEach(e=>{
+  (DATA.educations||[]).forEach(e=>{
     let locked;
     if (e.details) { // 관리자용 응답
       locked = e.details.some(d=>!d.unlocked && String(d.device||"")===DEVICE_ID);
@@ -603,8 +609,9 @@ function showAdmin() {
 }
 async function logoutAdmin() {
   // 서명 화면은 항상 '참석자 모드'로 돌아간다.
-  // 화면만 바꾸는 게 아니라 서버 토큰을 폐기하고, 참석자용 최소 데이터로 다시 받는다.
   isAdmin = false;
+  const oldToken = getToken();
+  setToken("");
   // ★ 화면을 바꾸기 '전에' 목록을 비운다.
   //   데이터를 받아오는 동안 이전 목록이 남아 있으면 잠깐 스쳐 보인다.
   DATA = { educations: [] };
@@ -616,16 +623,35 @@ async function logoutAdmin() {
   document.getElementById("signView").classList.remove("hidden");
   window.scrollTo({top:0});
 
-  try { await call("apiLogout"); } catch(e){}
-  setToken("");
+  // 토큰 폐기는 결과를 기다리지 않는다. 이게 늦어져도 목록 표시가 막히면 안 된다.
+  if (oldToken) { try { call("apiLogout", null, oldToken).catch(()=>{}); } catch(e){} }
+
+  await reloadPickList();
+}
+
+// 참석자 목록 다시 불러오기. 한 번 실패했다고 막다른 화면을 띄우지 않고 두 번 더 시도한다.
+async function reloadPickList(attempt) {
+  attempt = attempt || 1;
   try {
     await loadData();
     tickClock();
     renderEduPick();
-  } catch(e) {
+  } catch(err) {
+    if (attempt < 3) {
+      await new Promise(r=>setTimeout(r, 600*attempt));
+      return reloadPickList(attempt + 1);
+    }
+    console.error("교육 목록 불러오기 실패:", err);
     document.getElementById("eduPick").innerHTML =
-      '<div class="empty">목록을 불러오지 못했습니다. 새로고침을 눌러 주세요.</div>';
+      '<div class="empty">교육 목록을 불러오지 못했습니다.<br>' +
+      '<span style="font-size:12px;opacity:.7">' + esc(err && err.message ? err.message : "") + '</span><br><br>' +
+      '<button class="btn-ghost btn-sm" onclick="retryPickList()">다시 시도</button></div>';
   }
+}
+async function retryPickList(){
+  document.getElementById("eduPick").innerHTML =
+    '<div class="empty">교육 목록을 불러오는 중…</div>';
+  await reloadPickList();
 }
 async function changePw() {
   const current = document.getElementById("pwCurrent").value;
@@ -771,7 +797,7 @@ async function submitSign() {
     // 이름/사번/부서는 보내지 않는다. 서버가 명단 번호(idx)로 시트에서 찾아 기록한다.
     const res = JSON.parse(await call("apiSubmitSign", JSON.stringify({
       eduId:currentEduId, idx:Number(idx),
-      sig:canvas.toDataURL("image/png"), device: DEVICE_ID
+      sig:buildSignatureDataURL(), device: DEVICE_ID
     })));
     if (res && res.locked) {
       // 서버가 이 기기의 중복 서명을 막음
@@ -787,7 +813,7 @@ async function submitSign() {
       pickEdu(currentEduId); // 드롭다운 갱신(서명완료자 비활성화 반영)
       return;
     }
-    if (!res || !res.ok) { toast("제출 실패: 다시 시도하세요", true); return; }
+    if (!res || !res.ok) { toast(res && res.msg ? res.msg : "제출 실패: 다시 시도하세요", true); return; }
     // 성공: 이 기기를 이 교육에 잠금
     setDeviceLock(currentEduId);
     if (e.signedIdx) e.signedIdx.push(Number(idx));
@@ -806,6 +832,30 @@ async function submitSign() {
 // ═══════════ 서명 패드 ═══════════
 const canvas=document.getElementById("pad"), ctx=canvas.getContext("2d");
 let drawing=false, hasSig=false;
+// 서명 이미지를 서버 저장 한도 안으로 줄인다.
+// 캔버스는 화면 배율(DPR)만큼 크게 그려지므로, 최신 폰(DPR 3)에서는 원본 PNG가
+// 구글시트 셀 한도를 넘어 제출이 거부될 수 있다. 폭을 줄여 다시 그린 뒤 보낸다.
+const SIG_MAX_CHARS = 40000; // 서버 한도(45,000)보다 여유 있게
+function scaleCanvasToDataURL(src, maxW){
+  const w = Math.max(1, Math.min(maxW, src.width));
+  const h = Math.max(1, Math.round(src.height * (w / src.width)));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.imageSmoothingEnabled = true;
+  try { g.imageSmoothingQuality = "high"; } catch(e){}
+  g.drawImage(src, 0, 0, w, h);
+  return c.toDataURL("image/png");
+}
+function buildSignatureDataURL(){
+  const widths = [720, 560, 440, 340, 260];
+  let url = "";
+  for (let i = 0; i < widths.length; i++){
+    url = scaleCanvasToDataURL(canvas, widths[i]);
+    if (url.length <= SIG_MAX_CHARS) return url;
+  }
+  return url; // 그래도 크면 서버가 거르고 사유를 알려준다
+}
 function resizeCanvas(){
   const r=canvas.getBoundingClientRect(); if(!r.width)return;
   const dpr=window.devicePixelRatio||1;
