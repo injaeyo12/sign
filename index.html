@@ -3,12 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- 안드로이드 크롬의 '강제 어두운 모드'가 배경을 반전시키면 서명(진한 잉크)이 안 보인다.
+     이 선언으로 페이지를 밝은 테마로 고정한다. -->
+<meta name="color-scheme" content="light only">
 <title>교육 서명부</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  :root { --blue:#185FA5; --blue-bg:#E6F1FB; --border:#D3D1C7; --text:#2C2C2A;
+  :root { color-scheme: light only; --blue:#185FA5; --blue-bg:#E6F1FB; --border:#D3D1C7; --text:#2C2C2A;
     --muted:#5F5E5A; --surface:#fff; --bg:#F1EFE8; --green:#3B6D11; --green-bg:#EAF3DE;
     --red:#A32D2D; --amber-bg:#FAEEDA; }
   body { font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic",sans-serif;
@@ -275,7 +278,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-08-25c";
+const APP_VERSION = "2026-08-25d";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -813,6 +816,7 @@ async function submitSign() {
   const e=getEdu(currentEduId), idx=document.getElementById("attendee").value;
   if (idx==="") return toast("이름을 선택하세요", true);
   if (!hasSig) return toast("서명을 해주세요", true);
+  if (!padHasInk()) { toast("서명이 비어 있습니다. 다시 서명해 주세요.", true); return; }
   const p=e.roster[idx];
   const btn=document.getElementById("submitBtn");
   btn.disabled=true; btn.textContent="제출 중…";
@@ -868,7 +872,28 @@ function scaleCanvasToDataURL(src, maxW){
   g.imageSmoothingEnabled = true;
   try { g.imageSmoothingQuality = "high"; } catch(e){}
   g.drawImage(src, 0, 0, w, h);
+  // 화면용으로 깔아둔 흰 바탕은 투명으로 되돌린다.
+  // (엑셀 셀 위에 흰 사각형이 얹혀 표 선을 가리는 것을 막기 위함)
+  try {
+    const im = g.getImageData(0, 0, w, h), d = im.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 235 && d[i+1] > 235 && d[i+2] > 235) d[i+3] = 0;
+    }
+    g.putImageData(im, 0, 0);
+  } catch(e) { /* 확인 불가 시 흰 바탕 그대로 둔다 */ }
   return c.toDataURL("image/png");
+}
+
+// 캔버스에 실제로 잉크가 있는지 확인. 빈 서명이 저장되는 것을 막는다.
+function padHasInk(){
+  try {
+    const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    for (let i = 0; i < d.length; i += 16) {          // 4픽셀 간격 표본검사
+      if (d[i+3] < 200) continue;
+      if (d[i] < 200 || d[i+1] < 200 || d[i+2] < 200) return true;
+    }
+    return false;
+  } catch(e) { return true; }   // 검사 불가하면 통과시킨다
 }
 function buildSignatureDataURL(){
   const widths = [720, 560, 440, 340, 260];
@@ -879,12 +904,34 @@ function buildSignatureDataURL(){
   }
   return url; // 그래도 크면 서버가 거르고 사유를 알려준다
 }
+// 캔버스는 width/height를 대입하는 순간 내용이 지워진다.
+// 모바일에서 스크롤로 주소창이 접히면 resize가 발생하는데, 그때마다 다시 대입하면
+// 이미 그린 서명이 사라진 채 제출된다. 크기가 그대로면 아예 손대지 않는다.
+function paintPadBase(w, h){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle="#ffffff"; ctx.fillRect(0,0,w,h);  // 흰 바탕 고정(다크모드에서도 잉크가 보이도록)
+}
+function applyPenStyle(dpr){
+  ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
+  ctx.lineWidth=2.2; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="#111";
+}
 function resizeCanvas(){
   const r=canvas.getBoundingClientRect(); if(!r.width)return;
   const dpr=window.devicePixelRatio||1;
-  canvas.width=r.width*dpr; canvas.height=r.height*dpr;
-  ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
-  ctx.lineWidth=2.2; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="#111";
+  const w=Math.round(r.width*dpr), h=Math.round(r.height*dpr);
+  if (w===canvas.width && h===canvas.height) return;  // ★ 크기 동일 → 지우지 않음
+
+  // 크기가 실제로 바뀐 경우에는 기존 서명을 옮겨 담는다
+  let snap=null;
+  if (hasSig && canvas.width>0 && canvas.height>0) {
+    snap=document.createElement("canvas");
+    snap.width=canvas.width; snap.height=canvas.height;
+    snap.getContext("2d").drawImage(canvas,0,0);
+  }
+  canvas.width=w; canvas.height=h;
+  paintPadBase(w,h);
+  if (snap) ctx.drawImage(snap,0,0,w,h);
+  applyPenStyle(dpr);
 }
 function pos(e){ const r=canvas.getBoundingClientRect(); const t=e.touches?e.touches[0]:e;
   return {x:t.clientX-r.left,y:t.clientY-r.top}; }
@@ -897,8 +944,13 @@ canvas.addEventListener("mouseup",en); canvas.addEventListener("mouseout",en);
 canvas.addEventListener("touchstart",st,{passive:false});
 canvas.addEventListener("touchmove",mv,{passive:false});
 canvas.addEventListener("touchend",en);
-function clearPad(){ ctx.clearRect(0,0,canvas.width,canvas.height); hasSig=false;
-  document.getElementById("sigHint").style.display="block"; }
+function clearPad(){
+  const dpr=window.devicePixelRatio||1;
+  paintPadBase(canvas.width, canvas.height);
+  applyPenStyle(dpr);
+  hasSig=false;
+  document.getElementById("sigHint").style.display="block";
+}
 
 // ═══════════ 관리: 교육 등록/수정 ═══════════
 function parseRoster(text){
