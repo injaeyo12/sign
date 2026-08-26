@@ -33,6 +33,17 @@
   canvas { display:block; width:100%; height:180px; border-radius:8px; }
   .sig-hint { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
     color:#bbb; font-size:14px; pointer-events:none; }
+  /* 연도/월 접기 그룹 */
+  .grp-year, .grp-month { display:flex; justify-content:space-between; align-items:center;
+    cursor:pointer; user-select:none; }
+  .grp-year { padding:11px 12px; margin-top:10px; background:var(--blue-bg); color:var(--blue);
+    border-radius:8px; font-weight:700; font-size:15px; }
+  .grp-month { padding:8px 11px; margin:8px 0 2px; background:#F7F6F1;
+    border:1px solid var(--border); border-radius:6px; font-size:14px;
+    color:var(--text); font-weight:600; }
+  .grp-count { font-size:12px; color:var(--muted); font-weight:400; }
+  .grp-year .grp-count { color:var(--blue); opacity:.75; }
+  .grp-month-body { padding-left:6px; border-left:2px solid var(--border); margin-left:4px; }
   .row { display:flex; gap:8px; margin-top:8px; }
   button { flex:1; height:46px; border:none; border-radius:8px; font-size:15px;
     font-weight:500; cursor:pointer; }
@@ -278,7 +289,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-08-25d";
+const APP_VERSION = "2026-08-26a";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -1030,10 +1041,75 @@ function cancelEdit() {
   document.getElementById("saveEduBtn").textContent="교육 등록";
   document.getElementById("cancelEditBtn").classList.add("hidden");
 }
+/* ═══════════ 연도 > 월 접기 그룹 ═══════════ */
+// 펼침 상태는 다시 그려도 유지되도록 전역에 둔다 (교육 저장 후 접힘이 초기화되지 않게).
+const groupOpen = {};
+function isGroupOpen(key, defaultOpen){
+  return (groupOpen[key] === undefined) ? defaultOpen : groupOpen[key];
+}
+function toggleGroup(key){
+  const box  = document.getElementById("grp_"+key);
+  const head = document.getElementById("grphead_"+key);
+  if(!box) return;
+  const hidden = box.classList.toggle("hidden");
+  groupOpen[key] = !hidden;
+  if(head){
+    const arrow = head.querySelector(".grp-arrow");
+    if(arrow) arrow.textContent = hidden ? "▸" : "▾";
+  }
+}
+// 최신순 목록을 연도 → 월로 묶는다. 일자 미정 교육은 맨 끝에 별도 묶음.
+function groupByPeriod(list){
+  const years = [], idx = {};
+  list.forEach(e=>{
+    const k = eduDateKey(e);                 // "YYYY-MM-DD" 또는 ""
+    const y = k ? k.slice(0,4) : "nodate";
+    const m = k ? k.slice(5,7) : "nodate";
+    if(!idx[y]){ idx[y] = { year:y, months:{}, order:[], count:0 }; years.push(idx[y]); }
+    const Y = idx[y];
+    if(!Y.months[m]){ Y.months[m] = { month:m, items:[] }; Y.order.push(m); }
+    Y.months[m].items.push(e);
+    Y.count++;
+  });
+  return years;   // 원본이 최신순이므로 연/월도 최신순으로 담긴다
+}
+// prefix: 화면 구분용(id 충돌 방지). itemHTML: 교육 1건을 그리는 함수.
+function renderGrouped(el, prefix, itemHTML){
+  const groups = groupByPeriod(sortedEduDesc());
+  const curY = (TODAY||"").slice(0,4), curM = (TODAY||"").slice(5,7);
+  el.innerHTML = groups.map(Y=>{
+    const noDate = Y.year === "nodate";
+    const yKey   = prefix+"_y_"+Y.year;
+    const yOpen  = isGroupOpen(yKey, noDate ? false : Y.year === curY);
+    const yLabel = noDate ? "일자 미정" : Y.year+"년";
+
+    const inner = noDate
+      ? `<div class="grp-month-body">${Y.months["nodate"].items.map(itemHTML).join("")}</div>`
+      : Y.order.map(m=>{
+          const M = Y.months[m];
+          const mKey  = prefix+"_m_"+Y.year+"-"+m;
+          const mOpen = isGroupOpen(mKey, Y.year === curY && m === curM);
+          return `<div class="grp-month" id="grphead_${mKey}" onclick="toggleGroup('${mKey}')">
+              <span><span class="grp-arrow">${mOpen?"▾":"▸"}</span> ${Number(m)}월</span>
+              <span class="grp-count">${M.items.length}건</span>
+            </div>
+            <div class="grp-month-body ${mOpen?"":"hidden"}" id="grp_${mKey}">
+              ${M.items.map(itemHTML).join("")}
+            </div>`;
+        }).join("");
+
+    return `<div class="grp-year" id="grphead_${yKey}" onclick="toggleGroup('${yKey}')">
+        <span><span class="grp-arrow">${yOpen?"▾":"▸"}</span> ${yLabel}</span>
+        <span class="grp-count">${Y.count}건</span>
+      </div>
+      <div class="${yOpen?"":"hidden"}" id="grp_${yKey}">${inner}</div>`;
+  }).join("");
+}
+
 function renderEduAdmin() {
   const el=document.getElementById("eduAdminList");
   if(!DATA.educations.length){ el.innerHTML='<div class="empty">등록된 교육이 없습니다.</div>'; return; }
-  el.innerHTML=sortedEduDesc().map(e=>{
+  renderGrouped(el, "adm", e=>{
     const doneSet=signedIdxSet(e);
     const signed=doneSet.size;
     const st=eduStatus(e);
@@ -1053,7 +1129,7 @@ function renderEduAdmin() {
         <span class="link" onclick="editEdu('${e.id}')">✎ 수정</span>
         <span class="del" onclick="delEdu('${e.id}')">🗑 삭제</span>
       </div></div>`;
-  }).join("");
+  });
 }
 function toggleRoster(id){
   const box=document.getElementById("roster_"+id);
@@ -1074,7 +1150,7 @@ async function delEdu(id) {
 function renderExport() {
   const el=document.getElementById("exportList");
   if(!DATA.educations.length){ el.innerHTML='<div class="empty">등록된 교육이 없습니다.</div>'; return; }
-  el.innerHTML=sortedEduDesc().map(e=>{
+  renderGrouped(el, "exp", e=>{
     const signed=signedIdxSet(e).size, total=e.roster.length;
     const done=signed>=total&&total>0;
     // 유효 서명(잠금해제 안 된 것)만 상세로 표시
@@ -1093,7 +1169,7 @@ function renderExport() {
       <div class="sign-detail-toggle" onclick="toggleDetail('${e.id}')">▸ 서명 기록 · 기기 잠금 해제 (${active.length}건)</div>
       <div class="sign-detail hidden" id="detail_${e.id}">${detailRows}</div>
     </div>`;
-  }).join("");
+  });
 }
 function toggleDetail(id){
   const box=document.getElementById("detail_"+id);
