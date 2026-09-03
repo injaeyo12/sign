@@ -299,8 +299,8 @@
           <label>강사명 <span style="color:var(--muted);font-weight:400;">(서명부 상단에 표시)</span></label>
           <input id="newEduInstructor" placeholder="예: 홍길동">
           <label>참석자 명단 <span style="color:var(--muted);font-weight:400;">(한 줄에 한 명: 이름, 사번, 부서)</span></label>
+          <p class="sub" style="margin:0 0 6px;">엑셀에서 이름·사번·부서 3개 열을 복사해 붙여넣어도 됩니다.</p>
           <textarea id="newRoster" rows="6" placeholder="홍길동, 20250001, 안전관리부&#10;김철수, 20250002, 시설관리처"></textarea>
-          <p class="sub" style="margin:6px 0 0;">엑셀에서 이름·사번·부서 3개 열을 복사해 붙여넣어도 됩니다.</p>
           <div class="row">
             <button class="btn-ghost hidden" id="cancelEditBtn" onclick="cancelEdit()">취소</button>
             <button class="btn-primary" id="saveEduBtn" onclick="saveEdu()">교육 등록</button>
@@ -361,7 +361,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-09-02a";
+const APP_VERSION = "2026-09-03a";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
