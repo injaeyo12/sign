@@ -195,8 +195,10 @@
   .spin { display:inline-block; width:20px; height:20px; border:2px solid var(--border-strong);
     border-top-color:var(--blue); border-radius:50%; animation:s .7s linear infinite; }
   @keyframes s { to { transform:rotate(360deg); } }
-  .toolbar { display:flex; gap:10px; margin-top:10px; }
-  .toolbar .link { padding:4px 0; }
+  /* 수정·삭제를 같은 기준선에 둔다: 세로 가운데 정렬 + 두 링크에 같은 크기·여백 */
+  .toolbar { display:flex; align-items:center; gap:14px; margin-top:10px; }
+  .toolbar .link, .toolbar .del { display:inline-flex; align-items:center; gap:4px;
+    padding:4px 0; font-size:13px; font-weight:600; line-height:1.4; }
   @media (prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
 </style>
 </head>
@@ -361,7 +363,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-09-03a";
+const APP_VERSION = "2026-09-22a";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
