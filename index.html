@@ -369,7 +369,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-09-28d";
+const APP_VERSION = "2026-09-28e";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -593,6 +593,37 @@ function signedIdxSet(e){
   return s;
 }
 // 관리자용: 명단 번호 → 출석 시각
+// 서버가 출석 가능 여부(open)를 내려주지 않는 경우를 대비한 화면 자체 판정.
+// 구버전 서버가 배포되어 있어도 예정·마감 교육이 열려 보이지 않게 한다.
+const OPEN_BEFORE_MIN = 30;   // 시작 30분 전부터
+function hhmmToMin(hhmm){
+  const p = String(hhmm||"").split(":");
+  return (parseInt(p[0],10)||0)*60 + (parseInt(p[1],10)||0);
+}
+// 반환: { open:boolean, why:"future|past|early|closed|unknown|", reason:"" }
+function localWindow(e){
+  const st = eduStatus(e);                       // past | today | future | nodate | unknown
+  if (st === "future") return { open:false, why:"future", reason:"아직 예정된 교육입니다. 교육 당일에 출석할 수 있습니다." };
+  if (st === "past")   return { open:false, why:"past",   reason:"종료된 교육입니다." };
+  if (st === "unknown")return { open:false, why:"unknown",reason:"교육 일자를 확인하는 중입니다. 새로고침 후 다시 시도하세요." };
+  if (st === "nodate") return { open:true,  why:"", reason:"" };
+  // 오늘 교육이면 시간 창을 본다
+  const tm = String(e.date||"").match(/(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})/);
+  if (!tm || !NOW_TIME) return { open:true, why:"", reason:"" };
+  const now = hhmmToMin(NOW_TIME);
+  if (now < hhmmToMin(tm[1]) - OPEN_BEFORE_MIN)
+    return { open:false, why:"early", reason:"아직 출석 시간이 아닙니다. " + tm[1] + " 교육 시작 " + OPEN_BEFORE_MIN + "분 전부터 출석할 수 있습니다." };
+  if (now > hhmmToMin(tm[2]))
+    return { open:false, why:"closed", reason:"출석 시간이 종료되었습니다. (" + tm[2] + " 마감) 담당자에게 문의하세요." };
+  return { open:true, why:"", reason:"" };
+}
+// 서버 값이 있으면 그것을 쓰고, 없으면 화면이 계산한다
+function windowOf(e){
+  if (e.open === true || e.open === false) {
+    return { open:e.open, why:e.why||"", reason:e.reason||"" };
+  }
+  return localWindow(e);
+}
 function attendedTime(e, person){
   const hit = e.signs && e.signs[String(person.empno)];
   return hit ? String(hit.time || "") : "";
@@ -829,8 +860,9 @@ function renderEduPick() {
     const done  = attendedCount(e);
     const allDone = done >= total && total > 0;
     const st = eduStatus(e);
-    // 출석 가능 여부는 서버가 판단해 내려준 값(e.open)을 따른다. 관리자는 항상 진입 가능.
-    const canEnter = isAdmin || (e.open !== false);
+    const w = windowOf(e);   // 서버 값 우선, 없으면 화면이 계산
+    // 관리자는 항상 진입 가능
+    const canEnter = isAdmin || w.open;
     if (canEnter) {
       const deviceLocked = !isAdmin && isDeviceLocked(e.id);
       const stTag = isAdmin && st==="future" ? '<span class="badge upcoming">예정</span>'
@@ -843,8 +875,8 @@ function renderEduPick() {
         ${stTag}</div>`;
     }
     // 아직 열리지 않았거나 마감된 교육: 흐리게, 클릭 불가
-    const why = e.why || (st==="unknown" ? "unknown" : "");
-    const tag = why==="closed" ? "마감" : why==="early" ? "대기" : why==="unknown" ? "확인 중" : "예정";
+    const tag = w.why==="closed" ? "마감" : w.why==="early" ? "대기"
+              : w.why==="unknown" ? "확인 중" : w.why==="past" ? "종료" : "예정";
     return `<div class="edu-item disabled">
       <div><div class="edu-name">${esc(e.name)}</div>
         <div class="edu-meta">${esc(e.date)||'일자 미정'} · 참석자 ${total}명</div></div>
@@ -855,8 +887,9 @@ function renderEduPick() {
 function pickEdu(id) {
   const e = getEdu(id);
   // 서버가 '지금 출석 가능'이라고 한 교육만 진입 (관리자는 예외)
-  if (!isAdmin && e.open === false) {
-    toast(e.reason || "지금은 출석할 수 없는 교육입니다.", true);
+  const w = windowOf(e);
+  if (!isAdmin && !w.open) {
+    toast(w.reason || "지금은 출석할 수 없는 교육입니다.", true);
     return;
   }
   currentEduId = id;
@@ -934,6 +967,12 @@ async function doCheckIn() {
       toast(res.msg || "지금은 출석할 수 없습니다.", true);
       try { await loadData(); } catch(_e){}
       renderEduPick();
+      return;
+    }
+    if (res && /알 수 없는 action/.test(String(res.msg||""))) {
+      // 서버(Apps Script)가 아직 옛 버전임 — 담당자가 재배포해야 한다
+      toast("서버가 아직 업데이트되지 않았습니다. 담당자에게 문의해 주세요.", true);
+      console.error("서버 응답:", res.msg, "→ Apps Script의 Code.gs를 새 버전으로 배포해야 합니다.");
       return;
     }
     toast((res && res.msg) ? res.msg : "출석 확인에 실패했습니다. 다시 시도하세요.", true);
