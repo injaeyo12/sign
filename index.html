@@ -128,6 +128,7 @@
   .field-err { margin-top:8px; padding:11px 13px; border-radius:10px;
     background:#FDECEC; border:1px solid var(--red-line); color:var(--red);
     font-size:14px; font-weight:600; line-height:1.45; }
+  .field-err-sub { display:block; margin-top:2px; font-weight:500; opacity:.85; }
   input.err { border-color:var(--red); box-shadow:0 0 0 3px rgba(214,69,69,.13); }
   .done-box { text-align:center; padding:26px 16px 20px; }
   .done-icon { width:56px; height:56px; margin:0 auto 12px; border-radius:50%;
@@ -376,7 +377,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-09-28f";
+const APP_VERSION = "2026-09-28g";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -946,7 +947,11 @@ function showFieldErr(msg) {
   const inp = document.getElementById("empnoInput");
   const hint = document.getElementById("empnoHint");
   if (!box) return;
-  box.textContent = msg;
+  // '(남은 시도 N회)'처럼 괄호로 끝나는 부가 안내는 둘째 줄로 내려 읽기 쉽게 한다
+  const m = String(msg).match(/^(.*?)\s*(\([^()]*\))\s*$/);
+  box.innerHTML = m
+    ? esc(m[1]) + '<span class="field-err-sub">' + esc(m[2]) + '</span>'
+    : esc(String(msg));
   box.classList.remove("hidden");
   if (hint) hint.classList.add("hidden");   // 안내 문구는 감춰 오류가 눈에 띄게
   if (inp) { inp.classList.add("err"); inp.focus(); inp.select(); }
