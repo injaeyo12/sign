@@ -377,7 +377,7 @@
 <script>
 // ═══════════ 상태 ═══════════
 // 화면에 표시되는 파일 버전. 캐시된 옛 파일을 쓰고 있는지 한눈에 확인하기 위함.
-const APP_VERSION = "2026-09-28g";
+const APP_VERSION = "2026-10-01b";
 let DATA = { educations: [] };
 let currentEduId = null;
 let TODAY = "";  // 서버 기준 오늘 (YYYY-MM-DD)
@@ -1282,18 +1282,39 @@ async function exportExcel(id) {
   ws.getCell("A1").alignment={horizontal:"left",vertical:"middle"};
   ws.getRow(1).height=22;
 
-  // ── 2행: 강의명 (큰 제목, 밑줄, 자간 느낌) ──
+  // ── 2행: 강의명 (큰 제목, 밑줄) ──
+  // 교육명이 길어도 표 폭을 넘지 않도록, 글자 수에 맞춰 자간과 글자 크기를 자동 조절한다.
+  //  1) 짧으면 글자 사이에 공백을 넣어 자간을 주고 크게 표시
+  //  2) 길면 자간을 빼고 글자 크기를 줄임
+  //  3) 그래도 길면 두 줄로 접고 행 높이를 늘림
   ws.mergeCells("A2:F2");
-  const titleSpaced = String(e.name).split("").join(" "); // 자간 흉내
-  ws.getCell("A2").value=titleSpaced;
-  ws.getCell("A2").font={size:24,bold:true,underline:true,name:"맑은 고딕"};
-  ws.getCell("A2").alignment={horizontal:"center",vertical:"middle"};
-  ws.getRow(2).height=42;
+  const titleRaw = String(e.name || "");
+  // 한글·한자 등 전각 문자는 폭을 2로 계산 (엑셀 열너비 단위 기준)
+  const visLen = str => Array.from(str).reduce((n,ch)=>
+    n + (/[\u1100-\u11FF\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(ch) ? 2 : 1), 0);
+  const TABLE_UNITS = 88;          // 표 전체 폭(열너비 합계 6+18+18+18+16+16=92)에서 여백을 뺀 값
+  const BASE_PT = 11;              // 열너비 기준 글꼴 크기
+  const fitSize = txt => Math.floor(TABLE_UNITS * BASE_PT / Math.max(1, visLen(txt)));
 
-  // ── 3행: 강사명 [ ○○○ ] ──
+  const spaced = Array.from(titleRaw).join(" ");   // 자간 흉내
+  let titleText, titleSize, titleLines = 1;
+  if (fitSize(spaced) >= 18) {                     // 자간을 넣어도 크게 들어감
+    titleText = spaced; titleSize = Math.min(24, fitSize(spaced));
+  } else if (fitSize(titleRaw) >= 14) {            // 자간을 빼면 들어감
+    titleText = titleRaw; titleSize = Math.min(24, fitSize(titleRaw));
+  } else {                                         // 두 줄로 접어 표시
+    titleText = titleRaw; titleSize = 14;
+    titleLines = Math.min(3, Math.ceil(visLen(titleRaw) / (TABLE_UNITS * BASE_PT / 14)));
+  }
+  ws.getCell("A2").value=titleText;
+  ws.getCell("A2").font={size:titleSize,bold:true,underline:true,name:"맑은 고딕"};
+  ws.getCell("A2").alignment={horizontal:"center",vertical:"middle",wrapText:titleLines>1};
+  ws.getRow(2).height = Math.max(42, Math.round(titleSize * 1.5) * titleLines + 8);
+
+  // ── 3행: 강사명 [강사명 : ○○○] ──
   ws.mergeCells("A3:F3");
   const instr = e.instructor ? e.instructor : "○○○";
-  ws.getCell("A3").value="[ "+instr+" ]";
+  ws.getCell("A3").value="[강사명 : "+instr+"]";
   ws.getCell("A3").font={size:12,bold:true,name:"맑은 고딕"};
   ws.getCell("A3").alignment={horizontal:"center",vertical:"middle"};
   ws.getRow(3).height=24;
@@ -1355,7 +1376,7 @@ async function exportExcel(id) {
     }
   });
 
-  // ── 표 아래: 이 문서가 어떤 기록인지 밝히는 문구 + 출력 일시 ──
+  // ── 표 아래: 이 문서가 어떤 기록인지 밝히는 문구 ──
   const noteRow = ws.addRow([]);
   noteRow.height = 8;
   const n1 = ws.addRow([]);
@@ -1365,15 +1386,6 @@ async function exportExcel(id) {
   n1.getCell(1).font={size:9,name:"맑은 고딕",color:{argb:"FF595959"}};
   n1.getCell(1).alignment={horizontal:"left",vertical:"middle"};
   n1.height=16;
-  const n2 = ws.addRow([]);
-  ws.mergeCells(`A${n2.number}:F${n2.number}`);
-  const nowD = new Date();
-  const two = v => String(v).padStart(2,"0");
-  n2.getCell(1).value = "출력 일시: " + nowD.getFullYear() + ". " + (nowD.getMonth()+1) + ". " +
-    nowD.getDate() + ". " + two(nowD.getHours()) + ":" + two(nowD.getMinutes());
-  n2.getCell(1).font={size:9,name:"맑은 고딕",color:{argb:"FF595959"}};
-  n2.getCell(1).alignment={horizontal:"left",vertical:"middle"};
-  n2.height=16;
 
   // 인쇄영역 설정
   ws.pageSetup={ fitToPage:true, fitToWidth:1, fitToHeight:0, margins:{left:0.5,right:0.5,top:0.6,bottom:0.6,header:0.3,footer:0.3} };
